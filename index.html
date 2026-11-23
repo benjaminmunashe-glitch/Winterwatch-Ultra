@@ -362,7 +362,10 @@
 // =====================================================================
 // Basics: settings, storage, brain
 // =====================================================================
-const DEFAULT_MODELS = { gemini: "gemini-2.5-flash", groq: "llama-3.3-70b-versatile", openai: "gpt-4o-mini", anthropic: "claude-haiku-5-5" };
+// Shared AI relay (Cloudflare Worker). Paste your Worker URL here after deploying relay/worker.js.
+// Visitors without their own key use it automatically. It holds no key – the key is a Worker secret.
+const RELAY_URL = "https://winterwatch-relay.benjaminmunashe.workers.dev";
+const DEFAULT_MODELS = { gemini: "gemini-3.5-flash-lite", groq: "llama-3.3-70b-versatile", openai: "gpt-4o-mini", anthropic: "claude-haiku-5-5" };
 const $ = id => document.getElementById(id);
 const store = {
   get: k => { try { return localStorage.getItem(k); } catch { return null; } },
@@ -375,7 +378,7 @@ function loadSettings() {
   $("provider").value = store.get("ww_provider") || "gemini";
   $("model").value = store.get("ww_model") || DEFAULT_MODELS[$("provider").value];
   const k = store.get("ww_key");
-  $("keystatus").textContent = k ? `Key saved in this browser (…${k.slice(-4)}).` : "No key saved.";
+  $("keystatus").textContent = k ? `Key saved in this browser (…${k.slice(-4)}).` : (RELAY_URL ? "No key saved – using the shared relay (no key needed)." : "No key saved.");
 }
 $("provider").onchange = () => { $("model").value = DEFAULT_MODELS[$("provider").value]; };
 $("save").onclick = () => {
@@ -390,6 +393,12 @@ async function askBrain(system, user) {
   const provider = store.get("ww_provider") || "gemini";
   const model = store.get("ww_model") || DEFAULT_MODELS[provider];
   const key = store.get("ww_key");
+  if (!key && RELAY_URL) {
+    // Shared relay: the key lives only in the relay's secret store, never in this page.
+    const r = await fetch(RELAY_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ system, user }) });
+    const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || r.statusText || "Relay error");
+    return { text: j.text || "(no text)", inTok: j.inTok, outTok: j.outTok, provider: "relay", model: j.model || "gemini" };
+  }
   if (!key) throw new Error("No API key saved – add one in Settings.");
   if (provider === "gemini") {
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
@@ -920,8 +929,8 @@ document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === t.dataset.view));
 });
 function updatePill() {
-  const k = store.get("ww_key"); $("keyDot").classList.toggle("on", !!k);
-  $("modelPillText").textContent = k ? (store.get("ww_model") || DEFAULT_MODELS[store.get("ww_provider") || "gemini"]) : "No key – open settings";
+  const k = store.get("ww_key"); $("keyDot").classList.toggle("on", !!k || !!RELAY_URL);
+  $("modelPillText").textContent = k ? (store.get("ww_model") || DEFAULT_MODELS[store.get("ww_provider") || "gemini"]) : (RELAY_URL ? "Shared relay" : "No key – open settings");
 }
 $("openSettings").onclick = () => $("settings").showModal();
 $("closeSettings").onclick = () => $("settings").close();
@@ -936,7 +945,7 @@ $("themeBtn").onclick = () => {
 loadSettings(); updatePill(); renderRoutes();
 $("rulesText").innerHTML = renderMd(RULES_MD);
 renderBench(); renderHandin();
-if (!store.get("ww_key")) setTimeout(() => $("settings").showModal(), 300);
+if (!store.get("ww_key") && !RELAY_URL) setTimeout(() => $("settings").showModal(), 300);
 runTonight().catch(e => $("tonightMeta").innerHTML = `<span class="warn">${esc(e.message)}</span>`);
 try { if (localStorage.getItem(HIST_CACHE)) loadHistory().catch(() => {}); } catch {}
 </script>
